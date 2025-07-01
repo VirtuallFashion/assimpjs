@@ -1,105 +1,166 @@
 <!DOCTYPE html>
 <html>
+  <head>
+    <meta http-equiv="content-type" content="text/html;charset=utf-8" />
+    <meta name="viewport" content="width=device-width, user-scalable=no" />
 
-<head>
-	<meta http-equiv="content-type" content="text/html;charset=utf-8">
-	<meta name="viewport" content="width=device-width, user-scalable=no">
+    <title>AssimpJS Demo</title>
+    <script type="text/javascript" src="../dist/assimpjs.js"></script>
+  </head>
 
-	<title>AssimpJS Demo</title>
-	<script type="text/javascript" src="../build_wasm/Release/assimpjs.js"></script>
+  <body>
+    <div style="display: flex; gap: 1rem; height: 12rem">
+      <div
+        id="dropzone"
+        style="
+          width: 16rem;
+          padding: 0.5rem;
+          margin-bottom: 1rem;
+          border: 1px solid #3e1b1b;
+          background-color: #877d7d;
+        "
+      ></div>
+      <div
+        style="
+          min-width: 16rem;
+          padding: 0.5rem;
+          margin-bottom: 1rem;
+          border: 1px solid #040404;
+          background-color: #87a2a2;
+        "
+      >
+        Output files<span id="filecount"></span>:
+        <ul id="filelist"></ul>
+      </div>
+    </div>
+    <div>
+      <label for="format">Export to</label>
+      <select name="format" id="format">
+        <option value="fbx">FBX</option>
+        <option value="obj">OBJ</option>
+        <option value="stl">STL</option>
+        <option value="glb2">GLB</option>
+        <option value="gltf2">GLTF</option>
+      </select>
+    </div>
+    <pre id="result"></pre>
 
-	<script type='text/javascript'>
-		function GetFileBuffer(file) {
-			return new Promise((resolve, reject) => {
-				let reader = new FileReader();
-				reader.onloadend = function (event) {
-					if (event.target.readyState === FileReader.DONE) {
-						resolve(event.target.result);
-					}
-				};
-				reader.onerror = function () {
-					reject();
-				};
-				reader.readAsArrayBuffer(file);
-			});
-		}
+    <script type="text/javascript">
+      window.onload = async function () {
+        const dropzone = document.getElementById("dropzone");
+        const resultDiv = document.getElementById("result");
+        const filecountElem = document.getElementById("filecount");
+        const filelistElem = document.getElementById("filelist");
 
-		function LoadModel(ajs, files, onLoad) {
-			let downloadFiles = [];
-			for (let i = 0; i < files.length; i++) {
-				downloadFiles.push(GetFileBuffer(files[i]));
-			}
-			Promise.all(downloadFiles).then((arrayBuffers) => {
-				// create new file list object, and add the files
-				let fileList = new ajs.FileList();
-				for (let i = 0; i < arrayBuffers.length; i++) {
-					fileList.AddFile(files[i].name, new Uint8Array(arrayBuffers[i]));
-				}
+        function GetFileBuffer(file) {
+          return new Promise((resolve, reject) => {
+            let reader = new FileReader();
+            reader.onloadend = function (event) {
+              if (event.target.readyState === FileReader.DONE) {
+                resolve(event.target.result);
+              }
+            };
+            reader.onerror = function () {
+              reject();
+            };
+            reader.readAsArrayBuffer(file);
+          });
+        }
 
-				// convert file list to assimp json
-				let result = ajs.ConvertFileList(fileList, 'fbx');
+        let resultUrls = [];
+        async function LoadModel(ajs, files, onLoad) {
+          const downloadFiles = [];
+          for (let i = 0; i < files.length; i++) {
+            downloadFiles.push(GetFileBuffer(files[i]));
+          }
+          const arrayBuffers = await Promise.all(downloadFiles);
+          // create new file list object, and add the files
+          let fileList = new ajs.FileList();
+          for (let i = 0; i < arrayBuffers.length; i++) {
+            fileList.AddFile(files[i].name, new Uint8Array(arrayBuffers[i]));
+          }
 
-				// check if the conversion succeeded
-				if (!result.IsSuccess() || result.FileCount() == 0) {
-					onLoad(result.GetErrorCode());
-					return;
-				}
+          // convert file list to selected format
+          const format = document.getElementById("format").value;
+          resultDiv.innerHTML = `Converting to ${format}...`;
+          let result = ajs.ConvertFileList(fileList, format);
 
-				// get the result file, and convert to string
-				let resultFile = result.GetFile(0);
-				const buffer = resultFile.GetContent();
+          // check if the conversion succeeded
+          if (!result.IsSuccess() || result.FileCount() == 0) {
+            onLoad(result.GetErrorCode());
+            return;
+          }
 
-				const blob = new Blob([buffer], { type: 'application/octet-stream' });
-				const url = URL.createObjectURL(blob);
-				const link = document.createElement('a');
-				link.href = url;
-				link.target = '_blank';
-				link.download = 'model.fbx';
-				document.body.appendChild(link);
-				link.click();
-				document.body.removeChild(link);
-				URL.revokeObjectURL(url);
+          // update the file count and list
+          filecountElem.innerHTML = ` (${result.FileCount()})`;
+          filelistElem.innerHTML = "";
+          // clear previous URLs
+          resultUrls.forEach((url) => URL.revokeObjectURL(url));
+          resultUrls = [];
+          for (let i = 0; i < result.FileCount(); i++) {
+            const file = result.GetFile(i);
+            let path = file.GetPath();
+            let ext = path.split(".").pop();
+            if (ext.length <= 0 || ext === path) {
+              path = `${path}.${format.toLowerCase()}`;
+            }
+            const li = document.createElement("li");
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(
+              new Blob([file.GetContent()], {
+                type: "application/octet-stream",
+              })
+            );
+            resultUrls.push(url);
+            link.href = url;
+            link.target = "_blank";
+            link.download = path;
+            link.innerHTML = path;
+            li.appendChild(link);
+            filelistElem.appendChild(li);
+          }
 
+          // get the result file, and convert to string
+          let resultFile = result.GetFile(0);
+          const buffer = resultFile.GetContent();
 
-				// let jsonContent = new TextDecoder().decode(resultFile.GetContent());
+          //   URL.revokeObjectURL(url);
+        }
 
-				// // parse the result json
-				// let resultJson = JSON.parse(jsonContent);
-
-				// onLoad(JSON.stringify(resultJson, null, 4));
-			});
-		}
-
-		window.onload = function () {
-			let resultDiv = document.getElementById('result');
-			resultDiv.innerHTML = 'Loading assimp.js...';
-			assimpjs().then(function (ajs) {
-				resultDiv.innerHTML = 'Drag&Drop your models here.';
-				window.addEventListener('dragstart', (ev) => {
-					ev.preventDefault();
-				}, false);
-				window.addEventListener('dragover', (ev) => {
-					ev.stopPropagation();
-					ev.preventDefault();
-					ev.dataTransfer.dropEffect = 'copy';
-				}, false);
-				window.addEventListener('drop', (ev) => {
-					ev.stopPropagation();
-					ev.preventDefault();
-					if (ev.dataTransfer.files.length > 0) {
-						resultDiv.innerHTML = 'Loading model...';
-						LoadModel(ajs, ev.dataTransfer.files, (result) => {
-							resultDiv.innerHTML = result;
-						});
-					}
-				}, false);
-			});
-		};
-	</script>
-</head>
-
-<body>
-	<pre id="result"></pre>
-</body>
-
+        resultDiv.innerHTML = "Loading assimp.js...";
+        const ajs = await assimpjs();
+        resultDiv.innerHTML = "Loaded assimp.js";
+        dropzone.innerHTML = "Drag&Drop your models here.";
+        dropzone.addEventListener(
+          "dragstart",
+          (ev) => ev.preventDefault(),
+          false
+        );
+        dropzone.addEventListener(
+          "dragover",
+          (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = "copy";
+          },
+          false
+        );
+        dropzone.addEventListener(
+          "drop",
+          async (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            if (ev.dataTransfer.files.length > 0) {
+              resultDiv.innerHTML = "Loading model...";
+              await LoadModel(ajs, ev.dataTransfer.files, (result) => {
+                resultDiv.innerHTML = result;
+              });
+              resultDiv.innerHTML = "Loaded model";
+            }
+          },
+          false
+        );
+      };
+    </script>
+  </body>
 </html>
